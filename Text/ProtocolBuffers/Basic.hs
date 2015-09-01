@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable,GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveDataTypeable,GeneralizedNewtypeDeriving,DataKinds,KindSignatures #-}
 -- | "Text.ProtocolBuffers.Basic" defines or re-exports most of the
 -- basic field types; 'Maybe','Bool', 'Double', and 'Float' come from
 -- the Prelude instead. This module also defined the 'Mergeable' and
@@ -11,6 +11,7 @@ module Text.ProtocolBuffers.Basic
     -- * Some of the type classes implemented messages and fields
   , Mergeable(..),Default(..) -- ,Wire(..)
   , isValidUTF8, toUtf8, utf8, uToString, uFromString
+  , Method(..)
   ) where
 
 import Data.Bits(Bits)
@@ -26,6 +27,8 @@ import Data.Word(Word8,Word32,Word64)
 
 import qualified Data.ByteString.Lazy as L(unpack)
 import Data.ByteString.Lazy.UTF8 as U (toString,fromString)
+
+import           GHC.TypeLits  (Symbol)
 
 -- Num instances are derived below for the purpose of getting fromInteger for case matching
 
@@ -134,11 +137,11 @@ instance Bounded FieldType where
 -- | 'EnumCode' is the Int32 assoicated with a
 -- EnumValueDescriptorProto and is in the range 0 to 2^31-1.
 newtype EnumCode = EnumCode { getEnumCode :: Int32 }  -- really [0..maxBound::Int32] of some .proto defined enumeration
-  deriving (Eq,Ord,Read,Show,Num,Data,Typeable) 
+  deriving (Eq,Ord,Read,Show,Num,Data,Typeable)
 
 instance Bounded EnumCode where
   minBound = 0
-  maxBound = 2147483647 -- 2^-31 -1 
+  maxBound = 2147483647 -- 2^-31 -1
 
 -- | 'WireSize' is the Int64 size type associate with the lazy
 -- bytestrings used in the 'Put' and 'Get' monads.
@@ -219,6 +222,9 @@ uToString (Utf8 bs) = U.toString bs
 uFromString :: String -> Utf8
 uFromString s = Utf8 (U.fromString s)
 
+-- | A descriptor for service methods.
+data Method (name :: Symbol) request response = Method
+                                              deriving (Typeable)
 
 -- Base types are not very mergeable, but their Maybe and Seq versions are:
 instance Mergeable a => Mergeable (Maybe a) where
@@ -257,4 +263,3 @@ instance Default (Maybe a) where defaultValue = Nothing
 instance Default (Seq a) where defaultValue = mempty
 instance Default ByteString where defaultValue = mempty
 instance Default Utf8 where defaultValue = mempty
-

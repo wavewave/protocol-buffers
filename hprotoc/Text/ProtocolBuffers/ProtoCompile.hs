@@ -19,7 +19,7 @@ import System.IO (stdin, stdout)
 
 import Text.ProtocolBuffers.Basic(defaultValue, Utf8(..), utf8)
 import Text.ProtocolBuffers.Identifiers(MName,checkDIString,mangle)
-import Text.ProtocolBuffers.Reflections(ProtoInfo(..),EnumInfo(..))
+import Text.ProtocolBuffers.Reflections(ProtoInfo(..),EnumInfo(..),ServiceInfo(..))
 import Text.ProtocolBuffers.WireMessage (messagePut, messageGet)
 
 import qualified Text.DescriptorProtos.FileDescriptorProto as D(FileDescriptorProto)
@@ -28,7 +28,7 @@ import qualified Text.DescriptorProtos.FileDescriptorProto as D.FileDescriptorPr
 import qualified Text.DescriptorProtos.FileDescriptorSet   as D.FileDescriptorSet(FileDescriptorSet(..))
 
 import Text.ProtocolBuffers.ProtoCompile.BreakRecursion(makeResult)
-import Text.ProtocolBuffers.ProtoCompile.Gen(protoModule,descriptorModules,enumModule)
+import Text.ProtocolBuffers.ProtoCompile.Gen(protoModule,descriptorModules,enumModule,serviceModule)
 import Text.ProtocolBuffers.ProtoCompile.MakeReflections(makeProtoInfo,serializeFDP)
 import Text.ProtocolBuffers.ProtoCompile.Resolve(loadProto,loadCodeGenRequest,makeNameMaps,getTLS
                                                 ,Env,LocalFP(..),CanonFP(..),TopLevel(..))
@@ -189,7 +189,7 @@ process options (Mutate f:rest) = process (f options) rest
 process options (Run f:rest) = let options' = f options
                             in runStandalone options' >> process options' rest
 process _options (Switch VersionInfo:_) = putStrLn versionInfo
-  
+
 mkdirFor :: FilePath -> IO ()
 mkdirFor p = createDirectoryIfMissing True (takeDirectory p)
 
@@ -265,7 +265,11 @@ run' o@(Output print' writeFile') options env fdps = do
       produceENM ei = do
         let file = joinPath . enumFilePath $ ei
         writeFile' file (prettyPrintStyleMode style myMode (enumModule ei))
+      produceSRV srv = do
+        let file = joinPath . serviceFilePath $ srv
+        writeFile' file (prettyPrintStyleMode style myMode (serviceModule result srv))
   mapM_ produceMSG (messages protoInfo)
   mapM_ produceENM (enums protoInfo)
+  mapM_ produceSRV (services protoInfo)
   let file = joinPath . protoFilePath $ protoInfo
   writeFile' file (prettyPrintStyleMode style myMode (protoModule result protoInfo (serializeFDP fdp)))

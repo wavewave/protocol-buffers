@@ -14,6 +14,7 @@
 module Text.ProtocolBuffers.Reflections
   ( ProtoName(..),ProtoFName(..),ProtoInfo(..),DescriptorInfo(..),FieldInfo(..),KeyInfo
   , HsDefault(..),SomeRealFloat(..),EnumInfo(..),EnumInfoApp
+  , ServiceInfo(..), MethodInfo(..)
   , ReflectDescriptor(..),ReflectEnum(..),GetMessageInfo(..)
   , makePNF, toRF, fromRF
   ) where
@@ -43,7 +44,7 @@ makePNF a bs cs d =
 -- from the '.proto' file and any nested levels of definition.
 --
 -- The name components are likely to have been mangled to ensure the
--- 'baseName' started with an uppercase letter, in @ ['A'..'Z'] @.
+-- 'baseName' started with an uppercase letter, in @ [A'..'Z'] @.
 data ProtoName = ProtoName { protobufName :: FIName Utf8     -- ^ fully qualified name using "package" prefix (no mangling)
                            , haskellPrefix :: [MName String] -- ^ Haskell specific prefix to module hierarchy (e.g. Text.Foo)
                            , parentModule :: [MName String]  -- ^ .proto specified namespace (like Com.Google.Bar)
@@ -65,6 +66,7 @@ data ProtoInfo = ProtoInfo { protoMod :: ProtoName        -- ^ blank protobufNam
                            , extensionKeys :: Seq KeyInfo -- ^ top level keys
                            , messages :: [DescriptorInfo] -- ^ all messages and groups
                            , enums :: [EnumInfo]          -- ^ all enums
+                           , services :: [ServiceInfo]    -- ^ all services
                            , knownKeyMap :: Map ProtoName (Seq FieldInfo) -- all keys in namespace
                            }
   deriving (Show,Read,Eq,Ord,Data,Typeable)
@@ -72,7 +74,7 @@ data ProtoInfo = ProtoInfo { protoMod :: ProtoName        -- ^ blank protobufNam
 data DescriptorInfo = DescriptorInfo { descName :: ProtoName
                                      , descFilePath :: [FilePath]
                                      , isGroup :: Bool
-                                     , fields :: Seq FieldInfo 
+                                     , fields :: Seq FieldInfo
                                      , keys :: Seq KeyInfo
                                      , extRanges :: [(FieldId,FieldId)]
                                      , knownKeys :: Seq FieldInfo
@@ -162,7 +164,7 @@ class ReflectEnum e where
 class ReflectDescriptor m where
   -- | This is obtained via 'read' on the stored 'show' output of the 'DescriptorInfo' in
   -- the module file. It is used in getting messages from the wire.
-  -- 
+  --
   -- Must not inspect argument
   getMessageInfo :: m -> GetMessageInfo
   getMessageInfo x = cached
@@ -175,3 +177,15 @@ class ReflectDescriptor m where
                                                   [ wireTag f | f <- F.toList (knownKeys di)]
                                               }
   reflectDescriptorInfo :: m -> DescriptorInfo    -- ^ Must not inspect argument
+
+data ServiceInfo =
+  ServiceInfo { serviceName     :: ProtoName
+              , serviceMethods  :: [MethodInfo]
+              , serviceFilePath :: [FilePath]
+              } deriving (Show,Read,Eq,Ord,Data,Typeable)
+
+data MethodInfo =
+  MethodInfo { methodName   :: ProtoName
+             , methodInput  :: ProtoName
+             , methodOutput :: ProtoName
+             } deriving (Show,Read,Eq,Ord,Data,Typeable)
