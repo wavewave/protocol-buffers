@@ -9,7 +9,7 @@
 -- parent Descriptor to the actual Descriptor.  It moves the data out
 -- of Maybe types.  It converts Utf8 to String.  Keys known to extend
 -- a Descriptor are listed in that Descriptor.
--- 
+--
 -- In building the reflection info new things are computed. It changes
 -- dotted names to ProtoName using the translator from
 -- 'makeNameMaps'.  It parses the default value from the ByteString to
@@ -21,12 +21,16 @@ import qualified Text.DescriptorProtos.DescriptorProto                as D(Descr
 import qualified Text.DescriptorProtos.DescriptorProto                as D.DescriptorProto(DescriptorProto(..))
 import qualified Text.DescriptorProtos.DescriptorProto.ExtensionRange as D.DescriptorProto(ExtensionRange(ExtensionRange))
 import qualified Text.DescriptorProtos.DescriptorProto.ExtensionRange as D.DescriptorProto.ExtensionRange(ExtensionRange(..))
-import qualified Text.DescriptorProtos.EnumDescriptorProto            as D(EnumDescriptorProto) 
-import qualified Text.DescriptorProtos.EnumDescriptorProto            as D.EnumDescriptorProto(EnumDescriptorProto(..)) 
+import qualified Text.DescriptorProtos.EnumDescriptorProto            as D(EnumDescriptorProto)
+import qualified Text.DescriptorProtos.EnumDescriptorProto            as D.EnumDescriptorProto(EnumDescriptorProto(..))
 import qualified Text.DescriptorProtos.EnumValueDescriptorProto       as D(EnumValueDescriptorProto)
 import qualified Text.DescriptorProtos.EnumValueDescriptorProto       as D.EnumValueDescriptorProto(EnumValueDescriptorProto(..))
-import qualified Text.DescriptorProtos.FieldDescriptorProto           as D(FieldDescriptorProto) 
-import qualified Text.DescriptorProtos.FieldDescriptorProto           as D.FieldDescriptorProto(FieldDescriptorProto(..)) 
+import qualified Text.DescriptorProtos.ServiceDescriptorProto         as D(ServiceDescriptorProto)
+import qualified Text.DescriptorProtos.ServiceDescriptorProto         as D.ServiceDescriptorProto(ServiceDescriptorProto(..))
+import qualified Text.DescriptorProtos.MethodDescriptorProto          as D(MethodDescriptorProto)
+import qualified Text.DescriptorProtos.MethodDescriptorProto          as D.MethodDescriptorProto(MethodDescriptorProto(..))
+import qualified Text.DescriptorProtos.FieldDescriptorProto           as D(FieldDescriptorProto)
+import qualified Text.DescriptorProtos.FieldDescriptorProto           as D.FieldDescriptorProto(FieldDescriptorProto(..))
 -- import qualified Text.DescriptorProtos.FieldDescriptorProto.Label     as D.FieldDescriptorProto(Label)
 import           Text.DescriptorProtos.FieldDescriptorProto.Label     as D.FieldDescriptorProto.Label(Label(..))
 -- import qualified Text.DescriptorProtos.FieldDescriptorProto.Type      as D.FieldDescriptorProto(Type)
@@ -73,11 +77,11 @@ toHaskell reMap k = case M.lookup k reMap of
 
 makeProtoInfo :: (Bool,Bool,Bool) -- unknownField, lazyFields and lenses for makeDescriptorInfo'
               -> NameMap
-              -> D.FileDescriptorProto 
+              -> D.FileDescriptorProto
               -> ProtoInfo
 makeProtoInfo (unknownField,lazyFieldsOpt,lenses) (NameMap (packageID,hPrefix,hParent) reMap)
               fdp@(D.FileDescriptorProto { D.FileDescriptorProto.name = Just rawName })
-     = ProtoInfo protoName (pnPath protoName) (toString rawName) keyInfos allMessages allEnums allOneofs allKeys where
+     = ProtoInfo protoName (pnPath protoName) (toString rawName) keyInfos allMessages allEnums allOneofs allServices allKeys where
   packageName = getPackageID packageID :: FIName (Utf8)
   protoName = case hParent of
                 [] -> case hPrefix of
@@ -87,12 +91,13 @@ makeProtoInfo (unknownField,lazyFieldsOpt,lenses) (NameMap (packageID,hPrefix,hP
   keyInfos = Seq.fromList . map (\f -> (keyExtendee' reMap f,toFieldInfo' reMap packageName lenses f))
              . F.toList . D.FileDescriptorProto.extension $ fdp
   allMessages = concatMap (processMSG packageName False) (F.toList $ D.FileDescriptorProto.message_type fdp)
-  allEnums = map (makeEnumInfo' reMap packageName) (F.toList $ D.FileDescriptorProto.enum_type fdp) 
+  allEnums = map (makeEnumInfo' reMap packageName) (F.toList $ D.FileDescriptorProto.enum_type fdp)
              ++ concatMap (processENM packageName) (F.toList $ D.FileDescriptorProto.message_type fdp)
   allOneofs = concatMap (processONO packageName) (F.toList $ D.FileDescriptorProto.message_type fdp)
+  allServices = fmap (makeServiceInfo' reMap packageName) (F.toList $ D.FileDescriptorProto.service fdp)
   allKeys = M.fromListWith mappend . map (\(k,a) -> (k,Seq.singleton a))
             . F.toList . mconcat $ keyInfos : map keys allMessages
-  processMSG parent msgIsGroup msg = 
+  processMSG parent msgIsGroup msg =
     let getKnownKeys protoName' = fromMaybe Seq.empty (M.lookup protoName' allKeys)
         groups = collectedGroups msg
         checkGroup x = elem (fromMaybe (imp $ "no message name in makeProtoInfo.processMSG.checkGroup:\n"++show msg)
@@ -149,6 +154,33 @@ makeOneofInfo' reMap parent lenses parentProto
         fieldInfos = fmap (\x->(getFieldProtoName x,getFieldInfo x)) rawFieldsOneof
 makeOneofInfo' _ _ _ _ _ = imp "makeOneofInfo: missing name"
 
+makeServiceInfo' :: ReMap -> FIName Utf8 -> D.ServiceDescriptorProto -> ServiceInfo
+makeServiceInfo' reMap parent msg =
+  ServiceInfo { serviceName     = serviceName
+              , serviceMethods  = fmap (makeMethodInfo' reMap (protobufName serviceName)  parent) (F.toList methods)
+              , serviceFilePath = pnPath serviceName
+              }
+  where
+    serviceName = toHaskell reMap $ fqAppend parent [IName rawServiceName]
+    D.ServiceDescriptorProto.ServiceDescriptorProto
+      { D.ServiceDescriptorProto.name    = Just rawServiceName
+      , D.ServiceDescriptorProto.method  = methods
+      , D.ServiceDescriptorProto.options = options
+      } = msg
+
+makeMethodInfo' :: ReMap -> FIName Utf8 -> FIName Utf8 -> D.MethodDescriptorProto -> MethodInfo
+makeMethodInfo' reMap service packageName msg =
+  MethodInfo { methodName   = protoName
+             , methodInput  = toHaskell reMap . FIName $ rawInput
+             , methodOutput = toHaskell reMap . FIName $ rawOutput
+             }
+  where
+    protoName = toHaskell reMap $ fqAppend service [IName rawMethodName]
+    D.MethodDescriptorProto.MethodDescriptorProto
+      { D.MethodDescriptorProto.name        = Just rawMethodName
+      , D.MethodDescriptorProto.input_type  = Just rawInput
+      , D.MethodDescriptorProto.output_type = Just rawOutput
+      } = msg
 
 keyExtendee' :: ReMap -> D.FieldDescriptorProto.FieldDescriptorProto -> ProtoName
 keyExtendee' reMap f = case D.FieldDescriptorProto.extendee f of
@@ -221,7 +253,7 @@ toFieldInfo' reMap parent lenses
 -}
                         wt | packedOption = toPackedWireTag fieldId                -- write packed
                            | otherwise = toWireTag fieldId fieldType               -- write unpacked
-                             
+
                         wt2 | validPacked = Just (toWireTag fieldId fieldType      -- read unpacked
                                                  ,toPackedWireTag fieldId)         -- read packed
                             | otherwise = Nothing
@@ -245,10 +277,10 @@ toFieldInfo' reMap parent lenses
                                  mayDef
 toFieldInfo' _ _ _ f = imp $ "toFieldInfo: missing info in "++show f
 
-collectedGroups :: D.DescriptorProto -> [Utf8] 
+collectedGroups :: D.DescriptorProto -> [Utf8]
 collectedGroups = catMaybes
                 . map D.FieldDescriptorProto.type_name
-                . filter (\f -> D.FieldDescriptorProto.type' f == Just TYPE_GROUP) 
+                . filter (\f -> D.FieldDescriptorProto.type' f == Just TYPE_GROUP)
                 . F.toList
                 . D.DescriptorProto.field
 
@@ -297,8 +329,8 @@ parseDefDouble bs = case (uToString bs) of
 
 {-
 parseDefDouble :: Utf8 -> Maybe HsDefault
-parseDefDouble bs | 
-                  | otherwise = fmap (HsDef'Rational . toRational) 
+parseDefDouble bs |
+                  | otherwise = fmap (HsDef'Rational . toRational)
                                 . mayRead reads' . uToString $ bs
 -}
 
@@ -314,7 +346,7 @@ parseDefFloat bs = case (uToString bs) of
 
 {-
 parseDefFloat :: Utf8 -> Maybe HsDefault
-parseDefFloat bs = fmap  (HsDef'Rational . toRational) 
+parseDefFloat bs = fmap  (HsDef'Rational . toRational)
                    . mayRead reads' . uToString $ bs
   where reads' :: ReadS Float
         reads' = readSigned' reads

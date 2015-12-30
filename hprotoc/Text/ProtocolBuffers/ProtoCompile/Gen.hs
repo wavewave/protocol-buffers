@@ -14,11 +14,11 @@
 -- The names are also assumed to have become fully-qualified, and all
 -- the optional type codes have been set.
 --
-module Text.ProtocolBuffers.ProtoCompile.Gen(protoModule,descriptorModules,enumModule,oneofModule,prettyPrint) where
+module Text.ProtocolBuffers.ProtoCompile.Gen(protoModule,descriptorModules,enumModule,oneofModule,serviceModule,prettyPrint) where
 
 import Text.ProtocolBuffers.Basic
 import Text.ProtocolBuffers.Identifiers
-import Text.ProtocolBuffers.Reflections(KeyInfo,HsDefault(..),SomeRealFloat(..),DescriptorInfo(..),ProtoInfo(..),OneofInfo(..),EnumInfo(..),ProtoName(..),ProtoFName(..),FieldInfo(..))
+import Text.ProtocolBuffers.Reflections(KeyInfo,HsDefault(..),SomeRealFloat(..),DescriptorInfo(..),ProtoInfo(..),EnumInfo(..),ProtoName(..),ProtoFName(..),FieldInfo(..),OneofInfo(..),ServiceInfo(..),MethodInfo(..))
 
 import Text.ProtocolBuffers.ProtoCompile.BreakRecursion(Result(..),VertexKind(..),pKey,pfKey,getKind,Part(..))
 
@@ -38,6 +38,7 @@ import           Data.Sequence (ViewL(..),(><))
 import qualified Data.Sequence as Seq(null,length,empty,viewl)
 import qualified Data.Set as S
 import System.FilePath(joinPath)
+import Data.Char (toLower)
 
 ecart :: String -> a -> a
 ecart _ x = x
@@ -328,6 +329,7 @@ oneofGet (p,fi) =
 --------------------------------------------
 -- Define LANGUAGE options as [ModulePramga]
 --------------------------------------------
+
 modulePragmas :: Bool -> [ModulePragma]
 modulePragmas templateHaskell =
   [ LanguagePragma src (map Ident $ thPragma ++ ["BangPatterns","DeriveDataTypeable","FlexibleInstances","MultiParamTypeClasses"])
@@ -430,19 +432,19 @@ enumX ei = DataDecl src DataType [] (baseIdent (enumName ei)) [] (map enumValueX
   where enumValueX (_,name) = QualConDecl src [] [] (ConDecl (Ident name) [])
 
 instanceTextTypeEnum :: EnumInfo -> Decl
-instanceTextTypeEnum ei 
+instanceTextTypeEnum ei
   = InstDecl src Nothing [] [] (private "TextType") [TyCon (unqualName (enumName ei))] [
         inst "tellT" [] (pvar "tellShow")
       , inst "getT" [] (pvar "getRead")
       ]
 
 instanceMergeableEnum :: EnumInfo -> Decl
-instanceMergeableEnum ei 
+instanceMergeableEnum ei
   = InstDecl src Nothing [] [] (private "Mergeable") [TyCon (unqualName (enumName ei))] []
 
 instanceBounded :: EnumInfo -> Decl
 instanceBounded ei
-    = InstDecl src Nothing [] [] (prelude "Bounded") [TyCon (unqualName (enumName ei))] 
+    = InstDecl src Nothing [] [] (prelude "Bounded") [TyCon (unqualName (enumName ei))]
          [set "minBound" (head values),set "maxBound" (last values)] -- values cannot be null in a well formed enum
   where values = enumValues ei
         set f (_,n) = inst f [] (lcon n)
@@ -481,13 +483,13 @@ instanceEnum ei
         fromEnum' = map fromEnum'one values
         fromEnum'one (v,n) = match "fromEnum" [PApp (local n) []] (litInt (getEnumCode v))
         toEnum' = [ match "toEnum" [] (compose mayErr (lvar "toMaybe'Enum")) ]
-        mayErr = pvar "fromMaybe" $$ (Paren (preludevar "error" $$  (litStr $ 
+        mayErr = pvar "fromMaybe" $$ (Paren (preludevar "error" $$  (litStr $
                    "hprotoc generated code: toEnum failure for type "++ fqMod (enumName ei))))
         succ' = zipWith (equate "succ") values (tail values) ++
-                [ match "succ" [PWildCard] (preludevar "error" $$  (litStr $ 
+                [ match "succ" [PWildCard] (preludevar "error" $$  (litStr $
                    "hprotoc generated code: succ failure for type "++ fqMod (enumName ei))) ]
         pred' = zipWith (equate "pred") (tail values) values ++
-                [ match "pred" [PWildCard] (preludevar "error" $$  (litStr $ 
+                [ match "pred" [PWildCard] (preludevar "error" $$  (litStr $
                    "hprotoc generated code: pred failure for type "++ fqMod (enumName ei))) ]
         equate f (_,n1) (_,n2) = match f [PApp (local n1) []] (lcon n2)
 
@@ -533,6 +535,56 @@ instanceReflectEnum ei
 
 hasExt :: DescriptorInfo -> Bool
 hasExt di = not (null (extRanges di))
+
+--------------------------------------------
+-- ServiceDescriptor module creation
+--------------------------------------------
+
+serviceModule :: Result -> ServiceInfo -> Module
+serviceModule result si =
+  Module src (ModuleName (fqMod name)) (modulePragmas False) Nothing
+  (Just [EThingAll (unqualName name)])
+  ( standardImports True False False ++
+    mapMaybe (importPN result moduleName Normal) (fmap methodInput (serviceMethods si)) ++
+    mapMaybe (importPN result moduleName Normal) (fmap methodOutput (serviceMethods si))
+  )
+  (serviceDecls si)
+  where
+    name = serviceName si
+    moduleName = ModuleName (fqMod (serviceName si))
+
+serviceDecls :: ServiceInfo -> [Decl]
+serviceDecls si' =
+  [ serviceDecl si' ]
+  ++ fmap (methodDecl si') (serviceMethods si')
+  ++ concatMap (methodProxy si') (serviceMethods si')
+  where
+    serviceDecl si =
+      TypeDecl src (baseIdent (serviceName si)) [] (
+        TyPromoted (PromotedList True (fmap (\mx -> PromotedCon False (UnQual (methodTypeName si mx)) )  (serviceMethods si))
+                   )
+        )
+
+    methodDecl si mi =
+      TypeDecl src (methodTypeName si mi) []
+      ( TyApp
+        ( TyApp
+          ( TyApp ( TyCon (private "Method")) (TyPromoted (PromotedString ( toString (  fiName (protobufName (methodName mi)) )    ))))
+          ( TyCon ( UnQual (baseIdent (methodInput mi) )))
+        )
+        ( TyCon (UnQual (baseIdent (methodOutput mi))) )
+      )
+
+    methodTypeName _si mi =
+      baseIdent (methodName mi)
+
+    methodTypeName' si mi = toLower n: ame
+      where Ident (n:ame) = methodTypeName si mi
+
+    methodProxy si mi =
+      [ TypeSig src [Ident (methodTypeName' si mi)] (TyCon (UnQual (methodTypeName si mi)))
+      , PatBind src (PVar (Ident (methodTypeName' si mi))) (UnGuardedRhs (Con (private "Method"))) (BDecls [])
+      ]
 
 --------------------------------------------
 -- FileDescriptorProto module creation
@@ -587,7 +639,7 @@ embed'fdpBS bs = [ myType, myValue ]
   where myType = TypeSig src [ Ident "fileDescriptorProto" ] (TyCon (local "FileDescriptorProto"))
         myValue = PatBind src (PApp (local "fileDescriptorProto") []) (UnGuardedRhs $
                     pvar "getFromBS" $$
-                      Paren (pvar "wireGet" $$ litInt' 11) $$ 
+                      Paren (pvar "wireGet" $$ litInt' 11) $$
                       Paren (pvar "pack" $$ litStr (LC.unpack bs))) noWhere
 
 --------------------------------------------
@@ -792,7 +844,6 @@ descriptorX di = DataDecl src DataType [] name [] [QualConDecl src [] [] con] de
                             . (if storeUnknown di then (unknownField:) else id)
                             $ eOneof
                       eOneof = F.foldr ((:) . fieldOneofX) [] (descOneofs di)
-                      
         bangType = if lazyFields di then TyParen {- UnBangedTy -} else TyBang BangedTy . TyParen
         -- extfield :: ([Name],BangType)
         extfield = ([fieldIdent di "ext'field"], bangType (TyCon (private "ExtField")))
@@ -822,7 +873,7 @@ instancesDescriptor di = map ($ di) $
    , instanceDefault
    , instanceWireDescriptor
    , instanceMessageAPI . descName
-   , instanceGPB . descName                 
+   , instanceGPB . descName
    , instanceReflectDescriptor
    , instanceTextType
    , instanceTextMsg
@@ -846,7 +897,7 @@ instanceUnknownMessage di
   where putunknownfield = RecUpdate (lvar "msg") [ FieldUpdate (localField di "unknown'field") (lvar "u'f") ]
 
 instanceTextType :: DescriptorInfo -> Decl
-instanceTextType di 
+instanceTextType di
   = InstDecl src Nothing [] [] (private "TextType") [TyCon (unqualName (descName di))] [
         inst "tellT" [] (pvar "tellSubMessage")
       , inst "getT" [] (pvar "getSubMessage")
@@ -854,7 +905,7 @@ instanceTextType di
 
 
 instanceTextMsg :: DescriptorInfo -> Decl
-instanceTextMsg di 
+instanceTextMsg di
   = InstDecl src Nothing [] [] (private "TextMsg") [TyCon (unqualName (descName di))] [
         inst "textPut" [patvar msgVar] genPrint
       , InsDecl $ FunBind [Match src (Ident "textGet") [] Nothing (UnGuardedRhs parser) bdecls]
@@ -885,8 +936,8 @@ instanceTextMsg di
                         $$ pvar "spaces",
                 Qualifier $ (preludevar "return")
                     $$ Paren (preludevar "foldl"
-                        $$ Lambda src [patvar "v", patvar "f"] (lvar "f" $$ lvar "v") 
-                        $$ pvar "defaultValue" 
+                        $$ Lambda src [patvar "v", patvar "f"] (lvar "f" $$ lvar "v")
+                        $$ pvar "defaultValue"
                         $$ lvar "mods")
              ]
         parserName f = let Ident fname = baseIdent' (fieldName f) in "parse'" ++ fname
@@ -1009,7 +1060,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                           , knownKeys = fieldExts })
   = let me = unqualName protoName
         extensible = not (null allowedExts)
-        len = (if extensible then succ else id) 
+        len = (if extensible then succ else id)
             $ (if storeUnknown di then succ else id)
             $ Seq.length fieldInfos + Seq.length oneofInfos
         mine = PApp me . take len . map (\ n -> patvar ("x'" ++ show n)) $ [(1::Int)..]
@@ -1027,7 +1078,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                         ]
 
 -- wireSize generation
-        sizeCases = UnGuardedRhs $ cases (lvar "calc'Size") 
+        sizeCases = UnGuardedRhs $ cases (lvar "calc'Size")
                                          (pvar "prependMessageSize" $$ lvar "calc'Size")
                                          (pvar "wireSizeErr" $$ lvar "ft'" $$ lvar "self'")
 #if MIN_VERSION_haskell_src_exts(1, 17, 0)
@@ -1040,7 +1091,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
           where (+!) = mkOp "+"
                 sizesList | Just v <- mUnknown = sizesListExt ++ [ pvar "wireSizeUnknownField" $$ v ]
                           | otherwise = sizesListExt
-                sizesListExt | Just v <- mExt = sizesListFields ++ [ pvar "wireSizeExtField" $$ v ] 
+                sizesListExt | Just v <- mExt = sizesListFields ++ [ pvar "wireSizeExtField" $$ v ]
                              | otherwise = sizesListFields
                 sizesListFields =  concat . zipWith toSize vars . F.toList $
                                      fmap Left fieldInfos >< fmap Right oneofInfos
@@ -1130,7 +1181,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                           toUpdateO o f)
                      ++ (if extensible then concatMap toUpdateExt (F.toList fieldExts) else [])
                      ++ [Alt src PWildCard (UnGuardedRhs wildcardAlt) noWhere]
-        -- the wildcard alternative handles new extensions and 
+        -- the wildcard alternative handles new extensions and
         wildcardAlt = letPair extBranch
           where letPair = Let (BDecls [PatBind src (PTuple Boxed [patvar "field'Number",patvar "wire'Type"])
                                          (UnGuardedRhs (pvar "splitWireTag" $$ lvar "wire'Tag")) bdecls])
@@ -1177,7 +1228,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
 
 
         toUpdateUnpacked wt1 fi =
-          Alt src (litIntP . getWireTag $ wt1) (UnGuardedRhs $ 
+          Alt src (litIntP . getWireTag $ wt1) (UnGuardedRhs $
             preludevar "fmap" $$ (Paren $ Lambda src [PBangPat (patvar "new'Field")] $
                               RecUpdate (lvar "old'Self")
                                         [FieldUpdate (unqualFName . fieldName $ fi)
@@ -1194,7 +1245,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                                   $$ Paren x
                            | otherwise = x
         toUpdatePacked wt2 fi =
-          Alt src (litIntP . getWireTag $ wt2) (UnGuardedRhs $ 
+          Alt src (litIntP . getWireTag $ wt2) (UnGuardedRhs $
             preludevar "fmap" $$ (Paren $ Lambda src [PBangPat (patvar "new'Field")] $
                               RecUpdate (lvar "old'Self")
                                         [FieldUpdate (unqualFName . fieldName $ fi)
@@ -1296,5 +1347,3 @@ useType 16 = Just "Int64"
 useType 17 = Just "Int32"
 useType 18 = Just "Int64"
 useType  x = imp $ "useType: Unknown type code (expected 1 to 18) of "++show x
-
-

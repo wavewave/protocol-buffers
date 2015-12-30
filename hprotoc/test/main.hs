@@ -14,6 +14,9 @@ import Sample.Sample.Sample_message.Test_oneof
 import Sample.Sample.Sample_message.Newtest
 import Sample.Sample.Sample_message.User
 --
+import Service.Service
+import Service.Service.SearchService
+
 
 testmsg :: Sample_message
 testmsg = Sample_message { key = uFromString "key"
