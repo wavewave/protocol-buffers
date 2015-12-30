@@ -38,6 +38,7 @@ main' = do
 
 
 main = do
+  args <- getArgs 
   let fn = args !! 0
   lbstr <- LB.readFile fn
   let m = messageGet lbstr :: Either String (Sample_message,LB.ByteString)
