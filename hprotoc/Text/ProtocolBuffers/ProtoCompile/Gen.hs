@@ -570,9 +570,9 @@ serviceDecls si' =
       ( TyApp
         ( TyApp
           ( TyApp ( TyCon (private "Method")) (TyPromoted (PromotedString ( toString (  fiName (protobufName (methodName mi)) )    ))))
-          ( TyCon ( UnQual (baseIdent (methodInput mi) )))
+          ( TyCon (qualName (methodInput mi)) ) 
         )
-        ( TyCon (UnQual (baseIdent (methodOutput mi))) )
+        ( TyCon (qualName (methodOutput mi)) )
       )
 
     methodTypeName _si mi =
