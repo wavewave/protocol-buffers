@@ -332,7 +332,7 @@ oneofGet (p,fi) =
 
 modulePragmas :: Bool -> [ModulePragma]
 modulePragmas templateHaskell =
-  [ LanguagePragma src (map Ident $ thPragma ++ ["BangPatterns","DeriveDataTypeable","FlexibleInstances","MultiParamTypeClasses"])
+  [ LanguagePragma src (map Ident $ thPragma ++ ["BangPatterns","DeriveDataTypeable","FlexibleInstances","MultiParamTypeClasses","DataKinds"])
   , OptionsPragma src (Just GHC) " -fno-warn-unused-imports "
   ]
   where thPragma | templateHaskell = ["TemplateHaskell"]
