@@ -76,7 +76,7 @@ data ProtoInfo = ProtoInfo { protoMod :: ProtoName        -- ^ blank protobufNam
 data DescriptorInfo = DescriptorInfo { descName :: ProtoName
                                      , descFilePath :: [FilePath]
                                      , isGroup :: Bool
-                                     , fields :: Seq FieldInfo
+                                     , fields :: Seq FieldInfo 
                                      , descOneofs :: Seq OneofInfo 
                                      , keys :: Seq KeyInfo
                                      , extRanges :: [(FieldId,FieldId)]

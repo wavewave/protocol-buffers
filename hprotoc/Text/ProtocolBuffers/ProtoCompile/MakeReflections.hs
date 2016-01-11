@@ -37,8 +37,8 @@ import           Text.DescriptorProtos.FieldDescriptorProto.Label     as D.Field
 import           Text.DescriptorProtos.FieldDescriptorProto.Type      as D.FieldDescriptorProto.Type(Type(..))
 import qualified Text.DescriptorProtos.FieldOptions                   as D(FieldOptions(FieldOptions))
 import qualified Text.DescriptorProtos.FieldOptions                   as D.FieldOptions(FieldOptions(..))
-import qualified Text.DescriptorProtos.FileDescriptorProto            as D(FileDescriptorProto(FileDescriptorProto)) 
-import qualified Text.DescriptorProtos.FileDescriptorProto            as D.FileDescriptorProto(FileDescriptorProto(..)) 
+import qualified Text.DescriptorProtos.FileDescriptorProto            as D(FileDescriptorProto(FileDescriptorProto))
+import qualified Text.DescriptorProtos.FileDescriptorProto            as D.FileDescriptorProto(FileDescriptorProto(..))
 import qualified Text.DescriptorProtos.OneofDescriptorProto           as D(OneofDescriptorProto)
 import qualified Text.DescriptorProtos.OneofDescriptorProto           as D.OneofDescriptorProto(OneofDescriptorProto(..))
 
@@ -114,7 +114,7 @@ makeProtoInfo (unknownField,lazyFieldsOpt,lenses) (NameMap (packageID,hPrefix,hP
   processONO parent msg = foldr ((:) . makeOneofInfo' reMap parent' lenses msg) nested
                           (zip [0..] (F.toList (D.DescriptorProto.oneof_decl msg)))
     where parent' = fqAppend parent [IName (fromJust (D.DescriptorProto.name msg))]
-          nested = concatMap (processONO parent') (F.toList (D.DescriptorProto.nested_type msg))                          
+          nested = concatMap (processONO parent') (F.toList (D.DescriptorProto.nested_type msg))
 makeProtoInfo _ _ _ = imp $ "makeProtoInfo: missing name or package"
 
 makeEnumInfo' :: ReMap -> FIName Utf8 -> D.EnumDescriptorProto -> EnumInfo
@@ -182,6 +182,34 @@ makeMethodInfo' reMap service packageName msg =
       , D.MethodDescriptorProto.output_type = Just rawOutput
       } = msg
 
+makeServiceInfo' :: ReMap -> FIName Utf8 -> D.ServiceDescriptorProto -> ServiceInfo
+makeServiceInfo' reMap parent msg =
+  ServiceInfo { serviceName     = serviceName
+              , serviceMethods  = fmap (makeMethodInfo' reMap (protobufName serviceName)  parent) (F.toList methods)
+              , serviceFilePath = pnPath serviceName
+              }
+  where
+    serviceName = toHaskell reMap $ fqAppend parent [IName rawServiceName]
+    D.ServiceDescriptorProto.ServiceDescriptorProto
+      { D.ServiceDescriptorProto.name    = Just rawServiceName
+      , D.ServiceDescriptorProto.method  = methods
+      , D.ServiceDescriptorProto.options = options
+      } = msg
+
+makeMethodInfo' :: ReMap -> FIName Utf8 -> FIName Utf8 -> D.MethodDescriptorProto -> MethodInfo
+makeMethodInfo' reMap service packageName msg =
+  MethodInfo { methodName   = protoName
+             , methodInput  = toHaskell reMap . FIName $ rawInput
+             , methodOutput = toHaskell reMap . FIName $ rawOutput
+             }
+  where
+    protoName = toHaskell reMap $ fqAppend service [IName rawMethodName]
+    D.MethodDescriptorProto.MethodDescriptorProto
+      { D.MethodDescriptorProto.name        = Just rawMethodName
+      , D.MethodDescriptorProto.input_type  = Just rawInput
+      , D.MethodDescriptorProto.output_type = Just rawOutput
+      } = msg
+
 keyExtendee' :: ReMap -> D.FieldDescriptorProto.FieldDescriptorProto -> ProtoName
 keyExtendee' reMap f = case D.FieldDescriptorProto.extendee f of
                          Nothing -> imp $ "keyExtendee expected Just but found Nothing: "++show f
@@ -203,7 +231,7 @@ makeDescriptorInfo' reMap parent getKnownKeys msgIsGroup (unknownField,lazyField
                       , D.DescriptorProto.oneof_decl = rawOneofs
                       , D.DescriptorProto.extension = rawKeys
                       , D.DescriptorProto.extension_range = extension_range })
-    = let di = DescriptorInfo protoName (pnPath protoName) msgIsGroup 
+    = let di = DescriptorInfo protoName (pnPath protoName) msgIsGroup
                               fieldInfos oneofInfos keyInfos extRangeList
                               (getKnownKeys protoName)
                               unknownField lazyFieldsOpt lenses
@@ -213,7 +241,7 @@ makeDescriptorInfo' reMap parent getKnownKeys msgIsGroup (unknownField,lazyField
         fieldInfos = fmap (toFieldInfo' reMap (protobufName protoName) lenses) rawFieldsNotOneof
         oneofInfos = F.foldr ((<|) . makeOneofInfo' reMap (protobufName protoName) lenses msg) Seq.empty
                           (zip [0..] (F.toList rawOneofs))
-          
+
         keyInfos = fmap (\f -> (keyExtendee' reMap f,toFieldInfo' reMap (protobufName protoName) lenses f)) rawKeys
         extRangeList = concatMap check unchecked
           where check x@(lo,hi) | hi < lo = []

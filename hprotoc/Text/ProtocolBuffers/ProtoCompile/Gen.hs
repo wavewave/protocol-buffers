@@ -236,7 +236,7 @@ importO r selfMod@(ModuleName self) part oi =
       o = pKey pn
       m1 = ModuleName (joinMod (haskellPrefix pn ++ parentModule pn ++ [baseName pn]))
       m2 = ModuleName (joinMod (parentModule pn))
-      m3 = ModuleName (joinMod (parentModule pn ++ [baseName pn]))      
+      m3 = ModuleName (joinMod (parentModule pn ++ [baseName pn]))
       fromSource = S.member (FMName self,part,o) (rIBoot r)
 #if MIN_VERSION_haskell_src_exts(1, 17, 0)
       iabs1 = IAbs NoNamespace (Ident (mName (baseName pn)))
@@ -246,7 +246,7 @@ importO r selfMod@(ModuleName self) part oi =
       iabsget = map (IAbs . Ident . fst . oneofGet) . F.toList . oneofFields $ oi
 #endif
       ithall = IThingAll (Ident (mName (baseName pn)))
-              
+
       ans1 =  ImportDecl src m1 True fromSource False Nothing (Just m2)
                 (Just (False,[iabs1]))
       ans2 =  ImportDecl src m1 True fromSource False Nothing (Just m3)
@@ -312,7 +312,7 @@ oneofCon (name,_) = Con (qualName name)
 oneofPat :: (ProtoName,FieldInfo) -> (Pat,Pat)
 oneofPat (name,fi) =
   let fName@(Ident fname) = baseIdent' (fieldName fi)
-  in (PApp (qualName name) [PVar fName],PApp (unqualName name) [PVar fName]) 
+  in (PApp (qualName name) [PVar fName],PApp (unqualName name) [PVar fName])
 
 oneofRec :: (ProtoName,FieldInfo) -> (Exp,Exp)
 oneofRec (_,fi) =
@@ -332,7 +332,7 @@ oneofGet (p,fi) =
 
 modulePragmas :: Bool -> [ModulePragma]
 modulePragmas templateHaskell =
-  [ LanguagePragma src (map Ident $ thPragma ++ ["BangPatterns","DeriveDataTypeable","FlexibleInstances","MultiParamTypeClasses","DataKinds"])
+  [ LanguagePragma src (map Ident $ thPragma ++ ["BangPatterns","DataKinds","DeriveDataTypeable","FlexibleInstances","MultiParamTypeClasses"])
   , OptionsPragma src (Just GHC) " -fno-warn-unused-imports "
   ]
   where thPragma | templateHaskell = ["TemplateHaskell"]
@@ -361,7 +361,7 @@ oneofX :: OneofInfo -> Decl
 oneofX oi = DataDecl src DataType [] (baseIdent (oneofName oi)) []
               (map oneofValueX (F.toList (oneofFields oi) ))
               derives
-  where oneofValueX (pname,fi) = QualConDecl src [] [] con 
+  where oneofValueX (pname,fi) = QualConDecl src [] [] con
           where con = RecDecl (baseIdent pname) [fieldX]
                 fieldX = ([baseIdent' . fieldName $ fi], TyParen (TyCon typed ))
                 typed = case useType (getFieldType (typeCode fi)) of
@@ -378,7 +378,7 @@ oneofFuncs oi = map mkfuns (F.toList (oneofFields oi))
                          (UnGuardedRhs (preludecon "Just" $$ snd (oneofRec f))) noWhere
                        , Alt src PWildCard
                          (UnGuardedRhs (preludecon "Nothing")) noWhere
-                       ] 
+                       ]
 
 
 
@@ -398,7 +398,7 @@ instanceDefaultOneof oi
                                        Symbol _ -> imp ("instanceDefaultOneof: " ++ show n)
 
 instanceMergeableOneof :: OneofInfo -> Decl
-instanceMergeableOneof oi 
+instanceMergeableOneof oi
   = InstDecl src Nothing [] [] (private "Mergeable") [TyCon (unqualName (oneofName oi))] []
 
 
@@ -543,7 +543,13 @@ hasExt di = not (null (extRanges di))
 serviceModule :: Result -> ServiceInfo -> Module
 serviceModule result si =
   Module src (ModuleName (fqMod name)) (modulePragmas False) Nothing
-  (Just [EThingAll (unqualName name)])
+  (Just ([ EAbs NoNamespace (UnQual (serviceTypeName si))
+         , EVar (UnQual (serviceProxyName si))
+         ]
+         ++ fmap (\mi -> EAbs NoNamespace (UnQual (methodTypeName mi))) (serviceMethods si)
+         ++ fmap (\mi -> EVar (UnQual (methodProxyName mi))) (serviceMethods si)
+        )
+  )
   ( standardImports True False False ++
     mapMaybe (importPN result moduleName Normal) (fmap methodInput (serviceMethods si)) ++
     mapMaybe (importPN result moduleName Normal) (fmap methodOutput (serviceMethods si))
@@ -553,37 +559,52 @@ serviceModule result si =
     name = serviceName si
     moduleName = ModuleName (fqMod (serviceName si))
 
+serviceTypeName :: ServiceInfo -> Name
+serviceTypeName si = baseIdent (serviceName si)
+
+serviceProxyName :: ServiceInfo -> Name
+serviceProxyName si = Ident (toLower s : sx)
+  where Ident (s:sx) = baseIdent (serviceName si)
+
+methodProxyName :: MethodInfo -> Name
+methodProxyName mi = Ident (toLower s : sx)
+  where Ident (s:sx) = baseIdent (methodName mi)
+
+methodTypeName :: MethodInfo -> Name
+methodTypeName mi = Ident s
+  where Ident s = baseIdent (methodName mi)
+
 serviceDecls :: ServiceInfo -> [Decl]
 serviceDecls si' =
-  [ serviceDecl si' ]
+  [ serviceDecl si']
+  ++ serviceProxy si'
   ++ fmap (methodDecl si') (serviceMethods si')
   ++ concatMap (methodProxy si') (serviceMethods si')
   where
     serviceDecl si =
-      TypeDecl src (baseIdent (serviceName si)) [] (
-        TyPromoted (PromotedList True (fmap (\mx -> PromotedCon False (UnQual (methodTypeName si mx)) )  (serviceMethods si))
+      TypeDecl src (serviceTypeName si) [] (TyApp (TyCon (private "Service")) (
+        TyPromoted (PromotedList True (fmap (\mx -> TyPromoted (PromotedCon False (UnQual (methodTypeName mx))))  (serviceMethods si))
                    )
-        )
+        ))
 
-    methodDecl si mi =
-      TypeDecl src (methodTypeName si mi) []
+    serviceProxy si =
+      [ TypeSig src [serviceProxyName si] (TyCon (UnQual (serviceTypeName si)))
+      , PatBind src (PVar (serviceProxyName si)) (UnGuardedRhs (Con (private "Service"))) Nothing --(BDecls [])
+      ]
+
+    methodDecl _si mi =
+      TypeDecl src (methodTypeName mi) []
       ( TyApp
         ( TyApp
-          ( TyApp ( TyCon (private "Method")) (TyPromoted (PromotedString ( toString (  fiName (protobufName (methodName mi)) )    ))))
-          ( TyCon (qualName (methodInput mi)) ) 
+          ( TyApp ( TyCon (private "Method")) (TyPromoted (PromotedString ( toString (  fiName (protobufName (methodName mi)) )))))
+          ( TyCon ( UnQual (baseIdent (methodInput mi) )))
         )
-        ( TyCon (qualName (methodOutput mi)) )
+        ( TyCon (UnQual (baseIdent (methodOutput mi))) )
       )
 
-    methodTypeName _si mi =
-      baseIdent (methodName mi)
-
-    methodTypeName' si mi = toLower n: ame
-      where Ident (n:ame) = methodTypeName si mi
-
-    methodProxy si mi =
-      [ TypeSig src [Ident (methodTypeName' si mi)] (TyCon (UnQual (methodTypeName si mi)))
-      , PatBind src (PVar (Ident (methodTypeName' si mi))) (UnGuardedRhs (Con (private "Method"))) (BDecls [])
+    methodProxy _si mi =
+      [ TypeSig src [methodProxyName mi] (TyCon (UnQual (methodTypeName mi)))
+      , PatBind src (PVar (methodProxyName mi)) (UnGuardedRhs (Con (private "Method"))) Nothing -- (BDecls [])
       ]
 
 --------------------------------------------
@@ -840,7 +861,7 @@ descriptorX di = DataDecl src DataType [] name [] [QualConDecl src [] [] con] de
         name = baseIdent self
         con = RecDecl name eFields
                 where eFields = F.foldr ((:) . fieldX) end (fields di)
-                      end = (if hasExt di then (extfield:) else id) 
+                      end = (if hasExt di then (extfield:) else id)
                             . (if storeUnknown di then (unknownField:) else id)
                             $ eOneof
                       eOneof = F.foldr ((:) . fieldOneofX) [] (descOneofs di)
@@ -926,12 +947,12 @@ instanceTextMsg di
         genPrint = if null flds && null os
                    then preludevar "return" $$ Hse.Tuple Boxed []
                    else Do $ genPrintFields ++ genPrintOneofs
-                   
+
         parser
             | null flds && null os = preludevar "return" $$ pvar "defaultValue"
             | otherwise = Do [
-                Generator src (patvar "mods") 
-                    $ pvar "sepEndBy" 
+                Generator src (patvar "mods")
+                    $ pvar "sepEndBy"
                         $$ Paren (pvar "choice" $$ List (map (lvar . parserName) flds ++ map (lvar . parserNameO) os))
                         $$ pvar "spaces",
                 Qualifier $ (preludevar "return")
@@ -952,7 +973,7 @@ instanceTextMsg di
                     $$ Paren (Lambda src [patvar "o"]
                         (RecUpdate (lvar "o") [ FieldUpdate (local funcname) update]))
             ]
-                     
+
         subparsersO = map funbind os
         funbind o = FunBind [Match src (Ident (parserNameO o)) [] Nothing (UnGuardedRhs (getOneof)) whereParse]
           where getOneof = pvar "try" $$
@@ -1028,9 +1049,9 @@ instanceDefault di
         [ inst "defaultValue" [] (foldl' App (Con un) deflistExt) ]
   where un = unqualName (descName di)
         deflistExt = F.foldr ((:) . defX) end (fields di)
-        end = (if hasExt di then (pvar "defaultValue":) else id) 
+        end = (if hasExt di then (pvar "defaultValue":) else id)
             . (if storeUnknown di then (pvar "defaultValue":) else id)
-            $ F.foldr ((:) . defOneof) [] (descOneofs di)  
+            $ F.foldr ((:) . defOneof) [] (descOneofs di)
 
         defX :: FieldInfo -> Exp
         defX fi | isRequired fi = dv1
@@ -1097,9 +1118,9 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                      fmap Left fieldInfos >< fmap Right oneofInfos
         toSize var (Left fi)
           = let f = if isPacked fi then "wireSizePacked"
-                    else if isRequired fi then "wireSizeReq"
-                         else if canRepeat fi then "wireSizeRep"
-                              else "wireSizeOpt"
+                                  else if isRequired fi then "wireSizeReq"
+                                         else if canRepeat fi then "wireSizeRep"
+                                                else "wireSizeOpt"
             in [foldl' App (pvar f) [ litInt (wireTagLength fi)
                                     , litInt (getFieldType (typeCode fi))
                                     , var]]
@@ -1107,8 +1128,8 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
           where toSize' var r@(n,fi)
                   = let f = "wireSizeOpt"
                         var' = mkOp "Prelude'.=<<" (Var (qualName (snd (oneofGet r)))) var
-                    in foldl' App (pvar f) [ litInt (wireTagLength fi)
-                                           , litInt (getFieldType (typeCode fi))
+                        in foldl' App (pvar f) [ litInt (wireTagLength fi)
+                                                 , litInt (getFieldType (typeCode fi))
                                            , var']
 
 
@@ -1138,14 +1159,14 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                  fmap Left fieldInfos >< fmap Right oneofInfos
         toPut var (Left fi)
           = let f = if isPacked fi then "wirePutPacked"
-                    else if isRequired fi then "wirePutReq"
-                         else if canRepeat fi then "wirePutRep"
-                              else "wirePutOpt"
+                                 else if isRequired fi then "wirePutReq"
+                                        else if canRepeat fi then "wirePutRep"
+                                               else "wirePutOpt"
             in [(fieldNumber fi,
                  Qualifier $
-                   foldl' App (pvar f) [ litInt (getWireTag (wireTag fi))
-                                       , litInt (getFieldType (typeCode fi))
-                                       , var]
+                          foldl' App (pvar f) [ litInt (getWireTag (wireTag fi))
+                                                , litInt (getFieldType (typeCode fi))
+                                                , var]
                  )]
         toPut var (Right oi) = map (toPut' var) . F.toList . oneofFields $ oi
           where toPut' var r@(n,fi)
@@ -1263,11 +1284,11 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
 
         -- for fields in OneofInfo
         toUpdateO oi f@(_n,fi)
-          | Just (wt1,wt2) <- packedTag fi = [toUpdateUnpackedO oi wt1 f, toUpdatePackedO oi wt2 f] 
+          | Just (wt1,wt2) <- packedTag fi = [toUpdateUnpackedO oi wt1 f, toUpdatePackedO oi wt2 f]
           | otherwise                      = [toUpdateUnpackedO oi (wireTag fi) f]
 
         toUpdateUnpackedO oi wt1 f@(_,fi) =
-          Alt src (litIntP . getWireTag $ wt1) (UnGuardedRhs $ 
+          Alt src (litIntP . getWireTag $ wt1) (UnGuardedRhs $
             preludevar "fmap" $$ (Paren $ Lambda src [PBangPat (patvar "new'Field")] $
                               RecUpdate (lvar "old'Self")
                                         [FieldUpdate (unqualFName . oneofFName $ oi)
@@ -1282,7 +1303,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                                   $$ Paren x
                            | otherwise = x
         toUpdatePackedO oi wt2 f@(_,fi) =
-          Alt src (litIntP . getWireTag $ wt2) (UnGuardedRhs $ 
+          Alt src (litIntP . getWireTag $ wt2) (UnGuardedRhs $
             preludevar "fmap" $$ (Paren $ Lambda src [PBangPat (patvar "new'Field")] $
                               RecUpdate (lvar "old'Self")
                                         [FieldUpdate (unqualFName . oneofFName $ oi)
@@ -1292,7 +1313,7 @@ instanceWireDescriptor di@(DescriptorInfo { descName = protoName
                                                                  $$ lvar "old'Self")
                                                   $$ Paren (preludecon "Just" $$
                                                               (oneofCon f $$ lvar "new'Field"))
- 
+
 
 
 

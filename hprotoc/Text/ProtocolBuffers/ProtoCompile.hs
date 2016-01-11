@@ -278,6 +278,6 @@ run' o@(Output print' writeFile') options env fdps = do
   mapM_ produceMSG (messages protoInfo)
   mapM_ produceENM (enums protoInfo)
   mapM_ produceONO (oneofs protoInfo)
-  mapM_ produceSRV (services protoInfo)                      
+  mapM_ produceSRV (services protoInfo)
   let file = joinPath . protoFilePath $ protoInfo
   writeFile' file (prettyPrintStyleMode style myMode (protoModule result protoInfo (serializeFDP fdp)))
